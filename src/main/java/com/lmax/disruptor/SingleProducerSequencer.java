@@ -143,24 +143,24 @@ public final class SingleProducerSequencer extends SingleProducerSequencerFields
         long nextValue = this.nextValue;
 
         long nextSequence = nextValue + n;
-        long wrapPoint = nextSequence - bufferSize;
-        long cachedGatingSequence = this.cachedValue;
-
+        long wrapPoint = nextSequence - bufferSize; // ringBuffer，序号不断自增，wrapPoint 就是折叠点
+        long cachedGatingSequence = this.cachedValue; // 初始值是 -1
+        // 初始条件下，wrapPoint < 0 ，下面的 if 走不到
         if (wrapPoint > cachedGatingSequence || cachedGatingSequence > nextValue)
-        {
-            cursor.setVolatile(nextValue);  // StoreLoad fence
+        { // 序号大于 bufferSize，buffer 开始折叠。
+            cursor.setVolatile(nextValue);  // StoreLoad fence。将当前 nextValue 保存到 cursor 中
 
             long minSequence;
             while (wrapPoint > (minSequence = Util.getMinimumSequence(gatingSequences, nextValue)))
-            {
+            { // 这里的等待，应该就是为了让 buffer 的数据被消费掉，否则无法写入新的数据。
                 LockSupport.parkNanos(1L); // TODO: Use waitStrategy to spin?
             }
 
             this.cachedValue = minSequence;
         }
 
-        this.nextValue = nextSequence;
-
+        this.nextValue = nextSequence; // 在当前序号 < bufferSize 时 ，直接更新 nextValue 即可。此时 cursor 仍然
+        // 是初始值。
         return nextSequence;
     }
 
@@ -222,8 +222,8 @@ public final class SingleProducerSequencer extends SingleProducerSequencerFields
     @Override
     public void publish(final long sequence)
     {
-        cursor.set(sequence);
-        waitStrategy.signalAllWhenBlocking();
+        cursor.set(sequence); // 将 cursor 设为当前的 seq，cursor 的含义：当前已写入的区间。
+        waitStrategy.signalAllWhenBlocking(); // 通知消费者可读
     }
 
     /**
